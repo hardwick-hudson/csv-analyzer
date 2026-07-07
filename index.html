@@ -25,6 +25,7 @@
 
     <div id="summary"></div>
     <div id="preview"></div>
+    <div id="stats"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script>
@@ -36,6 +37,8 @@
                     console.log("parse errors:", results.errors);
                     renderSummary(results.data, results.meta.fields);
                     renderPreview(results.data, results.meta.fields);
+                    const stats = analyzeColumns(results.data, results.meta.fields);
+                    renderStats(stats);
                 }
             });
         }
@@ -62,6 +65,94 @@
             html += "</tbody></table>";
             document.getElementById("preview").innerHTML = html;
         }
+
+        function analyzeColumns(data, fields){
+            const stats = [];
+
+            for (const field of fields){
+                let blanks = 0;
+                const numbers = [];
+                const distinctValues = new Set();
+
+                for (const row of data) {
+                    const raw = row[field];
+
+                    let trimmed;
+                    if (raw === undefined) {
+                        trimmed = "";
+                    } else {
+                        trimmed = raw.trim();
+                    }
+
+                    if (trimmed === ""){
+                        blanks++;
+                        continue;
+                    }
+
+                    distinctValues.add(trimmed);
+
+                    const num = Number(trimmed);
+                    if (!Number.isNaN(num)){
+                        numbers.push(num);
+                    }
+                }
+                const nonBlank = data.length - blanks;
+
+                let type = "text";
+                if (nonBlank === 0) {
+                    type = "empty";
+                } else if (numbers.length / nonBlank >= 0.8){
+                    type = "numeric";
+                }
+                const columnStats = {
+                    name: field,
+                    type: type,
+                    total: data.length,
+                    blanks: blanks,
+                    numeric: numbers.length,
+                    distinct: distinctValues.size
+                };
+
+                if (type === "numeric" && numbers.length > 0){
+                    let sum = 0;
+                    let min = numbers[0];
+                    let max = numbers[0];
+                    for (const n of numbers) {
+                        sum += n;
+                        if (n < min) { min = n; }
+                        if (n > max) { max = n; }
+                    }
+                    columnStats.min = min;
+                    columnStats.max = max;
+                    columnStats.mean = sum / numbers.length;
+                }
+                stats.push(columnStats);
+            }
+            return stats;
+        }
+
+        function renderStats(stats) {
+            let html = "<table><thead><tr>";
+            html += "<th>column</th><th>type</th><th>blanks</th><th>distinct</th><th>min</th><th>max</th><th>mean</th>";
+            html += "</tr></thead><tbody>";
+
+            for (const col of stats) {
+                html += "<tr>";
+                html += `<td>${col.name}</td>`;
+                html += `<td>${col.type}</td>`;
+                html += `<td>${col.blanks}</td>`;
+                html += `<td>${col.distinct}</td>`;
+                if (col.type === "numeric") {
+                    html += `<td>${col.min}</td><td>${col.max}</td><td>${col.mean}</td>`;
+                } else {
+                    html += "<td>-</td><td>-</td><td>-</td>";
+                }
+                html += "</tr>";
+            }
+            html += "</tbody></table>";
+            document.getElementById("stats").innerHTML = html;
+        }
+
         const fileInput = document.getElementById("fileinput");
         fileInput.addEventListener("change", function (event) {
             handleFile(event.target.files[0]);
