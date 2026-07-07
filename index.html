@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang ="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>csv-analyzer</title>
+    <style>
+        /*futureadd*/
+        #dropzone {
+            border: 2px dashed #999;
+            padding: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>csv-analyzer</h1>
+
+    <div id="dropzone">
+            <p>Drop a CSV file here, or</p>
+            <label>
+                browse for one
+                <input type="file" id="fileinput" accept=".csv">
+            </label>
+    </div>
+
+    <div id="summary"></div>
+    <div id="preview"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script>
+        function handleFile(file) {
+            console.log(file.name, file.size);
+        }
+
+        const fileInput = document.getElementById("fileinput");
+        fileInput.addEventListener("change", function (event) {
+            handleFile(event.target.files[0]);
+        });
+
+        const dropzone = document.getElementById("dropzone");
+        dropzone.addEventListener("dragover", function (event) {
+            event.preventDefault();
+        });
+        dropzone.addEventListener("drop", function (event){
+            event.preventDefault();
+            handleFile(event.dataTransfer.files[0]);
+        });
+    </script>
+</body>
+</html>
