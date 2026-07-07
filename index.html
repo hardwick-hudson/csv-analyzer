@@ -29,9 +29,39 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script>
         function handleFile(file) {
-            console.log(file.name, file.size);
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function (results) {
+                    console.log("parse errors:", results.errors);
+                    renderSummary(results.data, results.meta.fields);
+                    renderPreview(results.data, results.meta.fields);
+                }
+            });
         }
 
+        function renderSummary(data, fields) {
+            const summary = document.getElementById("summary");
+            summary.textContent = `${data.length} rows x ${fields.length} columns`;
+        }
+
+        function renderPreview(data, fields) {
+            let html = "<table><thead><tr>";
+            for (const field of fields) {
+                html += `<th>${field}</th>`;
+            }
+            html += "</tr></thead><tbody>";
+
+            for (const row of data.slice(0, 20)){
+                html += "<tr>";
+                for (const field of fields){
+                    html += `<td>${row[field]}</td>`;
+                }
+                html += "</tr>";
+            }
+            html += "</tbody></table>";
+            document.getElementById("preview").innerHTML = html;
+        }
         const fileInput = document.getElementById("fileinput");
         fileInput.addEventListener("change", function (event) {
             handleFile(event.target.files[0]);
