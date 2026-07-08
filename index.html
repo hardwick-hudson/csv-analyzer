@@ -72,6 +72,12 @@
         return copy.slice(0, Math.min(n, copy.length));
     }
 
+    function escapeHtml(value) {
+        const div = document.createElement("div");
+        div.textContent = value;
+        return div.innerHTML;
+    }
+
     function handleFile(file) {
         Papa.parse(file, {
             header: true,
@@ -333,14 +339,18 @@
     function renderPreview(data, fields) {
         let html = "<table><thead><tr>";
         for (const field of fields) {
-            html += `<th>${field}</th>`;
+            html += `<th>${escapeHtml(field)}</th>`;
         }
         html += "</tr></thead><tbody>";
 
         for (const row of data.slice(0, 20)) {
             html += "<tr>";
             for (const field of fields) {
-                html += `<td>${row[field]}</td>`;
+                let value = row[field];
+                if (value === undefined) {
+                    value = "";
+                }
+                html += `<td>${escapeHtml(value)}</td>`;
             }
             html += "</tr>";
         }
@@ -355,7 +365,7 @@
         } else {
             html = "<ul>";
             for (const flag of flags) {
-                html += `<li>${flag}</li>`;
+                html += `<li>${escapeHtml(flag)}</li>`;
             }
             html += "</ul>";
         }
@@ -373,7 +383,7 @@
 
         for (const col of stats) {
             html += "<tr>";
-            html += `<td>${col.name}</td>`;
+            html += `<td>${escapeHtml(col.name)}</td>`;
             html += `<td>${col.type}</td>`;
             html += `<td>${col.blanks}</td>`;
             html += `<td>${col.distinct}</td>`;
