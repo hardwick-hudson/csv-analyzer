@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang ="en">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,306 +13,394 @@
     </style>
 </head>
 <body>
-    <h1>csv-analyzer</h1>
+<h1>csv-analyzer</h1>
 
-    <div id="dropzone">
-            <p>Drop a CSV file here, or</p>
-            <label>
-                browse for one
-                <input type="file" id="fileinput" accept=".csv">
-            </label>
-    </div>
+<div id="dropzone">
+    <p>Drop a CSV file here, or</p>
+    <label>
+        browse for one
+        <input type="file" id="fileinput" accept=".csv">
+    </label>
+</div>
 
-    <div id="summary"></div>
-    <div id="narrative"></div>
-    <div id="flags"></div>
-    <div id="stats"></div>
-    <div id="preview"></div>
+<div id="summary"></div>
+<div id="narrative"></div>
+<div id="flags"></div>
+<div id="stats"></div>
+<div id="preview"></div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <script>
+<div id="ai" style="display: none;">
+    <button id="aiButton">Generate AI summary</button>
+    <div id="aiOutput"></div>
+</div>
 
-        function isNumericValue(trimmed) {
-            if (trimmed === "") {
-                return false;
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+
+    function isNumericValue(trimmed) {
+        if (trimmed === "") {
+            return false;
+        }
+        return !Number.isNaN(Number(trimmed));
+    }
+
+    // linear-interpolated quantile; expects numbers sorted asc
+    function quantile(sorted, q) {
+        const pos = (sorted.length - 1) * q;
+        const base = Math.floor(pos);
+        const rest = pos - base;
+        if (base + 1 < sorted.length) {
+            return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+        }
+        return sorted[base];
+    }
+
+    function round2(n) {
+        return Math.round(n * 100) / 100;
+    }
+
+    // Fisher-Yates shuffle, then take first n: unbiased random sample without replacement.
+    // Fixed cap rather than proportional as a % would scale the privacy leak with file size.
+    function sampleRandom(data, n) {
+        const copy = data.slice();
+        for (let i = copy.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const tmp = copy[i];
+            copy[i] = copy[j];
+            copy[j] = tmp;
+        }
+        return copy.slice(0, Math.min(n, copy.length));
+    }
+
+    function handleFile(file) {
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: function (results) {
+                const data = results.data;
+                const fields = results.meta.fields;
+                const stats = analyzeColumns(data, fields);
+                const flags = findFlags(data, fields, stats, results.errors);
+
+                renderSummary(data, fields);
+                renderPreview(data, fields);
+                renderStats(stats);
+                renderFlags(flags);
+                renderNarrative(file.name, data, fields, stats, flags);
+                setupAi(file.name, data, fields, stats, flags);
             }
-            return !Number.isNaN(Number(trimmed));
-        }
-        // linear-interpolated quantile; expects numbers sorted asc
-        function quantile(sorted, q){
-            const pos = (sorted.length -1) * q;
-            const base = Math.floor(pos);
-            const rest = pos - base;
-            if (base + 1 < sorted.length){
-                return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
-            }
-            return sorted[base];
-        }
-        function round2(n) {
-            return Math.round(n * 100) / 100;
-        }
+        });
+    }
 
-        function handleFile(file) {
-            Papa.parse(file, {
-                header: true,
-                skipEmptyLines: true,
-                complete: function (results) {
-                    const data = results.data;
-                    const fields = results.meta.fields;
-                    const stats = analyzeColumns(data, fields);
-                    const flags = findFlags(data, fields, stats, results.errors);
+    function analyzeColumns(data, fields) {
+        const stats = [];
 
-                    renderSummary(data, fields);
-                    renderPreview(data, fields);
-                    renderStats(stats);
-                    renderFlags(flags);
-                    renderNarrative(file.name, data, fields, stats, flags);
+        for (const field of fields) {
+            let blanks = 0;
+            const numbers = [];
+            const distinctValues = new Set();
 
+            for (const row of data) {
+                const raw = row[field];
+
+                let trimmed;
+                if (raw === undefined) {
+                    trimmed = "";
+                } else {
+                    trimmed = raw.trim();
                 }
-            });
-        }
 
-        function renderSummary(data, fields) {
-            const summary = document.getElementById("summary");
-            summary.textContent = `${data.length} rows x ${fields.length} columns`;
-        }
-
-        function renderPreview(data, fields) {
-            let html = "<table><thead><tr>";
-            for (const field of fields) {
-                html += `<th>${field}</th>`;
-            }
-            html += "</tr></thead><tbody>";
-
-            for (const row of data.slice(0, 20)){
-                html += "<tr>";
-                for (const field of fields){
-                    html += `<td>${row[field]}</td>`;
+                if (trimmed === "") {
+                    blanks++;
+                    continue;
                 }
-                html += "</tr>";
+
+                distinctValues.add(trimmed);
+
+                if (isNumericValue(trimmed)) {
+                    numbers.push(Number(trimmed));
+                }
             }
-            html += "</tbody></table>";
-            document.getElementById("preview").innerHTML = html;
+            const nonBlank = data.length - blanks;
+
+            let type = "text";
+            if (nonBlank === 0) {
+                type = "empty";
+            } else if (numbers.length / nonBlank >= 0.8) {
+                // threshold is deliberately below 100% so a stray bad value
+                // flags as an anomaly instead of flipping the column to text
+                type = "numeric";
+            }
+            const columnStats = {
+                name: field,
+                type: type,
+                total: data.length,
+                blanks: blanks,
+                numeric: numbers.length,
+                distinct: distinctValues.size
+            };
+
+            if (type === "numeric" && numbers.length > 0) {
+                let sum = 0;
+                let min = numbers[0];
+                let max = numbers[0];
+                for (const n of numbers) {
+                    sum += n;
+                    if (n < min) {
+                        min = n;
+                    }
+                    if (n > max) {
+                        max = n;
+                    }
+                }
+                columnStats.min = min;
+                columnStats.max = max;
+                columnStats.mean = sum / numbers.length;
+                columnStats.sortedNumbers = numbers.slice().sort(function (a, b) {
+                    return a - b;
+                });
+            }
+            stats.push(columnStats);
+        }
+        return stats;
+    }
+
+    function findFlags(data, fields, stats, parseErrors) {
+        const flags = [];
+
+        for (const err of parseErrors) {
+            flags.push(`Parser: ${err.message} (row ${err.row + 1})`);
         }
 
-        function analyzeColumns(data, fields){
-            const stats = [];
-
-            for (const field of fields){
-                let blanks = 0;
-                const numbers = [];
-                const distinctValues = new Set();
-
-                for (const row of data) {
-                    const raw = row[field];
-
-                    let trimmed;
-                    if (raw === undefined) {
-                        trimmed = "";
-                    } else {
+        for (const col of stats) {
+            if (col.type === "numeric") {
+                for (let i = 0; i < data.length; i++) {
+                    const raw = data[i][col.name];
+                    let trimmed = "";
+                    if (raw !== undefined) {
                         trimmed = raw.trim();
                     }
-
-                    if (trimmed === ""){
-                        blanks++;
-                        continue;
-                    }
-
-                    distinctValues.add(trimmed);
-
-                    if (isNumericValue(trimmed)) {
-                        numbers.push(Number(trimmed));
+                    if (trimmed !== "" && !isNumericValue(trimmed)) {
+                        flags.push(`Column "${col.name}": non-numeric value "${trimmed}" in row ${i + 1}`);
                     }
                 }
-                const nonBlank = data.length - blanks;
-
-                let type = "text";
-                if (nonBlank === 0) {
-                    type = "empty";
-                } else if (numbers.length / nonBlank >= 0.8){
-                    // threshold is deliberately below 100% so a stray bad value
-                    // flags as an anomaly instead of flipping the column to text
-                    type = "numeric";
-                }
-                const columnStats = {
-                    name: field,
-                    type: type,
-                    total: data.length,
-                    blanks: blanks,
-                    numeric: numbers.length,
-                    distinct: distinctValues.size
-                };
-
-                if (type === "numeric" && numbers.length > 0){
-                    let sum = 0;
-                    let min = numbers[0];
-                    let max = numbers[0];
-                    for (const n of numbers) {
-                        sum += n;
-                        if (n < min) { min = n; }
-                        if (n > max) { max = n; }
-                    }
-                    columnStats.min = min;
-                    columnStats.max = max;
-                    columnStats.mean = sum / numbers.length;
-                    columnStats.sortedNumbers = numbers.slice().sort(function(a, b) {return a - b; });
-                }
-                stats.push(columnStats);
             }
-            return stats;
+            // IQR needs enough data to mean anything; below 8 values
+            // it stays silent rather than producing confident nonsense
+            if (col.type === "numeric" && col.sortedNumbers.length >= 8) {
+                const q1 = quantile(col.sortedNumbers, 0.25);
+                const q3 = quantile(col.sortedNumbers, 0.75);
+                const iqr = q3 - q1;
+                const low = q1 - 1.5 * iqr;
+                const high = q3 + 1.5 * iqr;
+                for (const n of col.sortedNumbers) {
+                    if (n < low || n > high) {
+                        flags.push(`Column "${col.name}": ${n} is a statistical outlier (expected range ${round2(low)} to ${round2(high)})`);
+                    }
+                }
+            }
+
+            if (col.total > 0 && col.blanks / col.total > 0.5) {
+                const pct = Math.round((col.blanks / col.total) * 100);
+                flags.push(`Column "${col.name}" is ${pct}% blank`);
+            }
+
+            if (col.distinct === 1 && col.blanks < col.total) {
+                flags.push(`Column "${col.name}" has only one value in every row`);
+            }
         }
-
-        function findFlags(data, fields, stats, parseErrors){
-            const flags = [];
-
-            for (const err of parseErrors){
-                flags.push(`Parser: ${err.message} (row ${err.row + 1})`);
-            }
-
-            for (const col of stats) {
-                if (col.type === "numeric") {
-                    for (let i = 0; i <data.length; i++) {
-                        const raw = data[i][col.name];
-                        let trimmed = "";
-                        if (raw !== undefined) {
-                            trimmed = raw.trim();
-                        }
-                        if (trimmed !== "" && !isNumericValue(trimmed)) {
-                            flags.push(`Column "${col.name}": non-numeric value "${trimmed}" in row ${i+1}`);
-                        }
-                    }
-                }
-                // IQR needs enough data to mean anything; below 8 values
-                // it stays silent rather than producing confident nonsense
-                if (col.type === "numeric" && col.sortedNumbers.length >= 8) {
-                    const q1 = quantile(col.sortedNumbers, 0.25);
-                    const q3 = quantile(col.sortedNumbers, 0.75);
-                    const iqr = q3 - q1;
-                    const low = q1 - 1.5 * iqr;
-                    const high = q3 +1.5 * iqr;
-                    for (const n of col.sortedNumbers) {
-                        if (n < low || n > high) {
-                            flags.push(`Column "${col.name}": ${n} is a statistical outlier (expected range ${round2(low)} to ${round2(high)})`);
-                        }
-                    }
-                }
-
-                if (col.total > 0 && col.blanks / col.total > 0.5) {
-                    const pct = Math.round((col.blanks / col.total) * 100);
-                    flags.push(`Column "${col.name}" is ${pct}% blank`);
-                }
-
-                if (col.distinct === 1 && col.blanks < col.total) {
-                    flags.push(`Column "${col.name}" has only one value in every row`);
-                }
-            }
-            // rows are joined on \u0001 instead of comma
-            // because cell data can contain commas
-            const seen = new Set();
-            for (let i = 0; i < data.length; i++) {
-                const parts = [];
-                for (const field of fields) {
-                    const raw = data[i][field];
-                    if (raw === undefined) {
-                        parts.push("");
-                    } else {
-                        parts.push(raw);
-                    }
-                }
-                const key = parts.join("\u0001");
-                if (seen.has(key)) {
-                    flags.push(`Row ${i+1} is an exact duplicate of an earlier row`);
-                } else {
-                    seen.add(key);
-                }
-            }
-            return flags;
-        }
-
-        function buildNarrative(fileName, data, fields, stats, flags) {
+        // rows are joined on \u0001 instead of comma
+        // because cell data can contain commas
+        const seen = new Set();
+        for (let i = 0; i < data.length; i++) {
             const parts = [];
-            parts.push(`${fileName} contains ${data.length} rows and ${fields.length} columns.`);
-
-            for (const col of stats) {
-                if (col.type === "numeric") {
-                    let sentence = `"${col.name}" is numeric, ranging from ${col.min} to ${col.max} (mean ${col.mean})`;
-                    if (col.blanks > 0) {
-                        sentence += `, with ${col.blanks} blank value(s)`;
-                    }
-                    parts.push(sentence + ".");
-                } else if (col.type === "empty") {
-                    parts.push(`"${col.name}" is entirely empty.`);
+            for (const field of fields) {
+                const raw = data[i][field];
+                if (raw === undefined) {
+                    parts.push("");
                 } else {
-                    let sentence = `"${col.name}" is text with ${col.distinct} distinct value(s)`;
-                    if (col.blanks > 0) {
-                        sentence += ` and ${col.blanks} blank value(s)`;
+                    parts.push(raw);
+                }
+            }
+            const key = parts.join("\u0001");
+            if (seen.has(key)) {
+                flags.push(`Row ${i + 1} is an exact duplicate of an earlier row`);
+            } else {
+                seen.add(key);
+            }
+        }
+        return flags;
+    }
+
+    function buildNarrative(fileName, data, fields, stats, flags) {
+        const parts = [];
+        parts.push(`${fileName} contains ${data.length} rows and ${fields.length} columns.`);
+
+        for (const col of stats) {
+            if (col.type === "numeric") {
+                let sentence = `"${col.name}" is numeric, ranging from ${col.min} to ${col.max} (mean ${col.mean})`;
+                if (col.blanks > 0) {
+                    sentence += `, with ${col.blanks} blank value(s)`;
+                }
+                parts.push(sentence + ".");
+            } else if (col.type === "empty") {
+                parts.push(`"${col.name}" is entirely empty.`);
+            } else {
+                let sentence = `"${col.name}" is text with ${col.distinct} distinct value(s)`;
+                if (col.blanks > 0) {
+                    sentence += ` and ${col.blanks} blank value(s)`;
+                }
+                parts.push(sentence + ".");
+            }
+        }
+
+        if (flags.length === 0) {
+            parts.push("No data quality issues were detected.");
+        } else if (flags.length === 1) {
+            parts.push("1 potential data quality issue was flagged below.");
+        } else {
+            parts.push(`${flags.length} potential data quality issues were flagged below.`);
+        }
+        return parts.join(" ");
+    }
+
+    function setupAi(fileName, data, fields, stats, flags) {
+        const section = document.getElementById("ai");
+        const button = document.getElementById("aiButton");
+        const output = document.getElementById("aiOutput");
+        section.style.display = "block";
+        output.textContent = "";
+
+        button.onclick = async function () {
+            button.disabled = true;
+            output.textContent = "Thinking...";
+
+
+            // the api receives a statistical profile and
+            // a small random sample of rows, never the whole file
+            const profile = {
+                fileName: fileName,
+                rows: data.length,
+                columns: stats.map(function (c) {
+                    const copy = Object.assign({}, c);
+                    delete copy.sortedNumbers;
+                    return copy;
+                }),
+                flags: flags,
+                sampleRows: sampleRandom(data, 5)
+            };
+
+            const prompt =
+                "You are a data analyst. Based on this profile of a CSV file " +
+                "(the full file was not shared; sample rows are randomly selected), " +
+                "write a short plain-English assessment: what the data appears " +
+                "to represent, and what the flagged issues likely mean. " +
+                "Be concise and concrete.\n\n" +
+                JSON.stringify(profile, null, 2);
+
+            try {
+                const response = await fetch("https://api.anthropic.com/v1/messages", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        model: "claude-sonnet-4-6",
+                        max_tokens: 1000,
+                        messages: [{role: "user", content: prompt}]
+                    })
+                });
+                const result = await response.json();
+                let text = "";
+                for (const block of result.content) {
+                    if (block.type === "text") {
+                        text += block.text;
                     }
-                    parts.push(sentence + ".");
                 }
+                output.textContent = text;
+            } catch (err) {
+                output.textContent =
+                    "AI summary is available in the Claude-hosted version of this tool. " +
+                    "Everything above runs locally and needs no account.";
             }
+            button.disabled = false;
+        };
+    }
 
-            if (flags.length === 0) {
-                parts.push("No data quality issues were detected.");
-            } else if (flags.length === 1) {
-                parts.push("1 potential data quality issue was flagged below.");
+    function renderSummary(data, fields) {
+        const summary = document.getElementById("summary");
+        summary.textContent = `${data.length} rows x ${fields.length} columns`;
+    }
+
+    function renderPreview(data, fields) {
+        let html = "<table><thead><tr>";
+        for (const field of fields) {
+            html += `<th>${field}</th>`;
+        }
+        html += "</tr></thead><tbody>";
+
+        for (const row of data.slice(0, 20)) {
+            html += "<tr>";
+            for (const field of fields) {
+                html += `<td>${row[field]}</td>`;
+            }
+            html += "</tr>";
+        }
+        html += "</tbody></table>";
+        document.getElementById("preview").innerHTML = html;
+    }
+
+    function renderFlags(flags) {
+        let html = "";
+        if (flags.length === 0) {
+            html = '<p class="muted">No issues detected.</p>';
+        } else {
+            html = "<ul>";
+            for (const flag of flags) {
+                html += `<li>${flag}</li>`;
+            }
+            html += "</ul>";
+        }
+        document.getElementById("flags").innerHTML = html;
+    }
+
+    function renderNarrative(fileName, data, fields, stats, flags) {
+        document.getElementById("narrative").textContent = buildNarrative(fileName, data, fields, stats, flags);
+    }
+
+    function renderStats(stats) {
+        let html = "<table><thead><tr>";
+        html += "<th>column</th><th>type</th><th>blanks</th><th>distinct</th><th>min</th><th>max</th><th>mean</th>";
+        html += "</tr></thead><tbody>";
+
+        for (const col of stats) {
+            html += "<tr>";
+            html += `<td>${col.name}</td>`;
+            html += `<td>${col.type}</td>`;
+            html += `<td>${col.blanks}</td>`;
+            html += `<td>${col.distinct}</td>`;
+            if (col.type === "numeric") {
+                html += `<td>${col.min}</td><td>${col.max}</td><td>${col.mean}</td>`;
             } else {
-                parts.push(`${flags.length} potential data quality issues were flagged below.`);
+                html += "<td>-</td><td>-</td><td>-</td>";
             }
-            return parts.join(" ");
+            html += "</tr>";
         }
+        html += "</tbody></table>";
+        document.getElementById("stats").innerHTML = html;
+    }
 
-        function renderFlags(flags) {
-            let html = "";
-            if (flags.length === 0){
-                html = '<p class="muted">No issues detected.</p>';
-            } else {
-                html = "<ul>";
-                for (const flag of flags) {
-                    html += `<li>${flag}</li>`;
-                }
-                html += "</ul>";
-            }
-            document.getElementById("flags").innerHTML = html;
-        }
-        function renderNarrative(fileName, data, fields, stats, flags) {
-            document.getElementById("narrative").textContent = buildNarrative(fileName, data, fields, stats, flags);
-        }
+    const fileInput = document.getElementById("fileinput");
+    fileInput.addEventListener("change", function (event) {
+        handleFile(event.target.files[0]);
+    });
 
-        function renderStats(stats) {
-            let html = "<table><thead><tr>";
-            html += "<th>column</th><th>type</th><th>blanks</th><th>distinct</th><th>min</th><th>max</th><th>mean</th>";
-            html += "</tr></thead><tbody>";
-
-            for (const col of stats) {
-                html += "<tr>";
-                html += `<td>${col.name}</td>`;
-                html += `<td>${col.type}</td>`;
-                html += `<td>${col.blanks}</td>`;
-                html += `<td>${col.distinct}</td>`;
-                if (col.type === "numeric") {
-                    html += `<td>${col.min}</td><td>${col.max}</td><td>${col.mean}</td>`;
-                } else {
-                    html += "<td>-</td><td>-</td><td>-</td>";
-                }
-                html += "</tr>";
-            }
-            html += "</tbody></table>";
-            document.getElementById("stats").innerHTML = html;
-        }
-
-        const fileInput = document.getElementById("fileinput");
-        fileInput.addEventListener("change", function (event) {
-            handleFile(event.target.files[0]);
-        });
-
-        const dropzone = document.getElementById("dropzone");
-        dropzone.addEventListener("dragover", function (event) {
-            event.preventDefault();
-        });
-        dropzone.addEventListener("drop", function (event){
-            event.preventDefault();
-            handleFile(event.dataTransfer.files[0]);
-        });
-    </script>
+    const dropzone = document.getElementById("dropzone");
+    dropzone.addEventListener("dragover", function (event) {
+        event.preventDefault();
+    });
+    dropzone.addEventListener("drop", function (event) {
+        event.preventDefault();
+        handleFile(event.dataTransfer.files[0]);
+    });
+</script>
 </body>
 </html>
