@@ -26,19 +26,46 @@
     <div id="summary"></div>
     <div id="preview"></div>
     <div id="stats"></div>
+    <div id="flags"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script>
+
+        function isNumericValue(trimmed) {
+            if (trimmed === "") {
+                return false;
+            }
+            return !Number.isNaN(Number(trimmed));
+        }
+        // linear-interpolated quantile; expects numbers sorted asc
+        function quantile(sorted, q){
+            const pos = (sorted.length -1) * q;
+            const base = Math.floor(pos);
+            const rest = pos - base;
+            if (base + 1 < sorted.length){
+                return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+            }
+            return sorted[base];
+        }
+        function round2(n) {
+            return Math.round(n * 100) / 100;
+        }
+
         function handleFile(file) {
             Papa.parse(file, {
                 header: true,
                 skipEmptyLines: true,
                 complete: function (results) {
-                    console.log("parse errors:", results.errors);
-                    renderSummary(results.data, results.meta.fields);
-                    renderPreview(results.data, results.meta.fields);
-                    const stats = analyzeColumns(results.data, results.meta.fields);
+                    const data = results.data;
+                    const fields = results.meta.fields;
+                    const stats = analyzeColumns(data, fields);
+                    const flags = findFlags(data, fields, stats, results.errors);
+
+                    renderSummary(data, fields);
+                    renderPreview(data, fields);
                     renderStats(stats);
+                    renderFlags(flags);
+
                 }
             });
         }
@@ -91,9 +118,8 @@
 
                     distinctValues.add(trimmed);
 
-                    const num = Number(trimmed);
-                    if (!Number.isNaN(num)){
-                        numbers.push(num);
+                    if (isNumericValue(trimmed)) {
+                        numbers.push(Number(trimmed));
                     }
                 }
                 const nonBlank = data.length - blanks;
@@ -102,6 +128,8 @@
                 if (nonBlank === 0) {
                     type = "empty";
                 } else if (numbers.length / nonBlank >= 0.8){
+                    // threshold is deliberately below 100% so a stray bad value
+                    // flags as an anomaly instead of flipping the column to text
                     type = "numeric";
                 }
                 const columnStats = {
@@ -125,10 +153,92 @@
                     columnStats.min = min;
                     columnStats.max = max;
                     columnStats.mean = sum / numbers.length;
+                    columnStats.sortedNumbers = numbers.slice().sort(function(a, b) {return a - b; });
                 }
                 stats.push(columnStats);
             }
             return stats;
+        }
+
+        function findFlags(data, fields, stats, parseErrors){
+            const flags = [];
+
+            for (const err of parseErrors){
+                flags.push(`Parser: ${err.message} (row ${err.row + 1})`);
+            }
+
+            for (const col of stats) {
+                if (col.type === "numeric") {
+                    for (let i = 0; i <data.length; i++) {
+                        const raw = data[i][col.name];
+                        let trimmed = "";
+                        if (raw !== undefined) {
+                            trimmed = raw.trim();
+                        }
+                        if (trimmed !== "" && !isNumericValue(trimmed)) {
+                            flags.push(`Column "${col.name}": non-numeric value "${trimmed}" in row ${i+1}`);
+                        }
+                    }
+                }
+                // IQR needs enough data to mean anything; below 8 values
+                // it stays silent rather than producing confident nonsense
+                if (col.type === "numeric" && col.sortedNumbers.length >= 8) {
+                    const q1 = quantile(col.sortedNumbers, 0.25);
+                    const q3 = quantile(col.sortedNumbers, 0.75);
+                    const iqr = q3 - q1;
+                    const low = q1 - 1.5 * iqr;
+                    const high = q3 +1.5 * iqr;
+                    for (const n of col.sortedNumbers) {
+                        if (n < low || n > high) {
+                            flags.push(`Column "${col.name}": ${n} is a statistical outlier (expected range ${round2(low)} to ${round2(high)})`);
+                        }
+                    }
+                }
+
+                if (col.total > 0 && col.blanks / col.total > 0.5) {
+                    const pct = Math.round((col.blanks / col.total) * 100);
+                    flags.push(`Column "${col.name}" is ${pct}% blank`);
+                }
+
+                if (col.distinct === 1 && col.blanks < col.total) {
+                    flags.push(`Column "${col.name}" has only one value in every row`);
+                }
+            }
+            // rows are joined on \u0001 instead of comma
+            // because cell data can contain commas
+            const seen = new Set();
+            for (let i = 0; i < data.length; i++) {
+                const parts = [];
+                for (const field of fields) {
+                    const raw = data[i][field];
+                    if (raw === undefined) {
+                        parts.push("");
+                    } else {
+                        parts.push(raw);
+                    }
+                }
+                const key = parts.join("\u0001");
+                if (seen.has(key)) {
+                    flags.push(`Row ${i+1} is an exact duplicate of an earlier row`);
+                } else {
+                    seen.add(key);
+                }
+            }
+            return flags;
+        }
+
+        function renderFlags(flags) {
+            let html = "";
+            if (flags.length === 0){
+                html = '<p class="muted">No issues detected.</p>';
+            } else {
+                html = "<ul>";
+                for (const flag of flags) {
+                    html += `<li>${flag}</li>`;
+                }
+                html += "</ul>";
+            }
+            document.getElementById("flags").innerHTML = html;
         }
 
         function renderStats(stats) {
