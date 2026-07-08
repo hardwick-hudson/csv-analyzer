@@ -24,9 +24,10 @@
     </div>
 
     <div id="summary"></div>
-    <div id="preview"></div>
-    <div id="stats"></div>
+    <div id="narrative"></div>
     <div id="flags"></div>
+    <div id="stats"></div>
+    <div id="preview"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script>
@@ -65,6 +66,7 @@
                     renderPreview(data, fields);
                     renderStats(stats);
                     renderFlags(flags);
+                    renderNarrative(file.name, data, fields, stats, flags);
 
                 }
             });
@@ -227,6 +229,38 @@
             return flags;
         }
 
+        function buildNarrative(fileName, data, fields, stats, flags) {
+            const parts = [];
+            parts.push(`${fileName} contains ${data.length} rows and ${fields.length} columns.`);
+
+            for (const col of stats) {
+                if (col.type === "numeric") {
+                    let sentence = `"${col.name}" is numeric, ranging from ${col.min} to ${col.max} (mean ${col.mean})`;
+                    if (col.blanks > 0) {
+                        sentence += `, with ${col.blanks} blank value(s)`;
+                    }
+                    parts.push(sentence + ".");
+                } else if (col.type === "empty") {
+                    parts.push(`"${col.name}" is entirely empty.`);
+                } else {
+                    let sentence = `"${col.name}" is text with ${col.distinct} distinct value(s)`;
+                    if (col.blanks > 0) {
+                        sentence += ` and ${col.blanks} blank value(s)`;
+                    }
+                    parts.push(sentence + ".");
+                }
+            }
+
+            if (flags.length === 0) {
+                parts.push("No data quality issues were detected.");
+            } else if (flags.length === 1) {
+                parts.push("1 potential data quality issue was flagged below.");
+            } else {
+                parts.push(`${flags.length} potential data quality issues were flagged below.`);
+            }
+            return parts.join(" ");
+        }
+
         function renderFlags(flags) {
             let html = "";
             if (flags.length === 0){
@@ -239,6 +273,9 @@
                 html += "</ul>";
             }
             document.getElementById("flags").innerHTML = html;
+        }
+        function renderNarrative(fileName, data, fields, stats, flags) {
+            document.getElementById("narrative").textContent = buildNarrative(fileName, data, fields, stats, flags);
         }
 
         function renderStats(stats) {
