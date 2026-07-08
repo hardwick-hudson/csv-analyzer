@@ -5,11 +5,55 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>csv-analyzer</title>
     <style>
-        /*futureadd*/
+        body {
+            font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+            max-width: 900px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            color: #1a1a1a;
+            line-height: 1.5;
+        }
+        h1 { font-weight: 600; }
         #dropzone {
             border: 2px dashed #999;
+            border-radius: 6px;
             padding: 2rem;
+            text-align: center;
+            color: #555;
         }
+        #dropzone.dragging { border-color: #1a1a1a; background: #eef4ff; }
+        #summary { margin: 1.5rem 0 0.5rem; font-weight: 600; }
+        table {
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 0.4rem 0.6rem;
+            text-align: left;
+            font-variant-numeric: tabular-nums;
+        }
+        th { background: #f5f5f5; font-weight: 600; }
+        #flags ul { padding-left: 1.2rem; }
+        #flags li { margin: 0.3rem 0; }
+        #narrative {
+            background: #f5f5f5;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+        #aiButton {
+            padding: 0.5rem 1rem;
+            border: 1px solid #1a1a1a;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        #aiButton:disabled { opacity: 0.5; cursor: wait; }
+        #aiOutput { margin-top: 1rem; white-space: pre-wrap; }
+        .muted { color: #777; font-size: 0.9rem; }
     </style>
 </head>
 <body>
@@ -161,7 +205,7 @@
                 }
                 columnStats.min = min;
                 columnStats.max = max;
-                columnStats.mean = sum / numbers.length;
+                columnStats.mean = round2(sum / numbers.length);
                 columnStats.sortedNumbers = numbers.slice().sort(function (a, b) {
                     return a - b;
                 });
@@ -406,9 +450,14 @@
     const dropzone = document.getElementById("dropzone");
     dropzone.addEventListener("dragover", function (event) {
         event.preventDefault();
+        dropzone.classList.add("dragging");
+    });
+    dropzone.addEventListener("dragleave", function () {
+        dropzone.classList.remove("dragging");
     });
     dropzone.addEventListener("drop", function (event) {
         event.preventDefault();
+        dropzone.classList.remove("dragging");
         handleFile(event.dataTransfer.files[0]);
     });
 </script>
